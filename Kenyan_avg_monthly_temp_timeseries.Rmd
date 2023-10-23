@@ -1,0 +1,223 @@
+---
+title: "R Notebook"
+author: "Kelvin Mwaka Muia"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      out.width = "150%",
+                      out.height = "150%",
+                      fig.align = "center")
+```
+
+
+
+```{r}
+rm(list = ls()) #clear R work space for every rerun
+# silent package loading
+packages <- c("prophet", "janitor","knitr","forcats","forecast",
+              "lubridate", "ggplot2","keras","tidyverse", 
+              "formatR","ggthemes","ggpubr", "scales","tidymodels")
+# Install packages not yet installed
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+    install.packages(packages[!installed_packages])}
+# Packages loading
+invisible(lapply(packages, library, character.only = TRUE))
+```
+
+
+```{r}
+#load Kenyan average monthly temperatures from 1991 to 2016
+kenyan_temp <- read.csv("kenya-climate-data-1991-2016-temp-degress-celcius.csv")
+kenyan_rain <- read.csv("kenya-climate-data-1991-2016-rainfallmm.csv")
+#view structure
+glimpse(kenyan_temp)
+glimpse(kenyan_rain)
+```
+    
+## Cleaning the climate data
+
+```{r}
+#clean column names using janitor
+kenyan_temp <- clean_names(kenyan_temp)
+kenyan_rain <- clean_names(kenyan_rain)
+#remove the "Average" part from the monthly names
+kenyan_temp <- kenyan_temp |>
+  mutate(month = gsub("Average", "", month_average)) |>
+  mutate(month = gsub("\\s", "", month)) |>
+  select(year,month,temperature_celsius)
+head(kenyan_temp)
+```
+      
+## Create date data.  
+
+```{r}
+#mapping of abbreviated month names to full month names
+month_mapping <- c( "Jan" = "January","Feb" = "February","Mar" = "March",
+                    "Apr" = "April","May" = "May","Jun" = "June",
+                    "Jul" = "July","Aug" = "August","Sep" = "September",
+                    "Oct" = "October","Nov" = "November","Dec" = "December")
+#converting the month column to a factor and map it to full month names
+kenyan_temp <- kenyan_temp |>
+  mutate(month = fct_recode(as.factor(month), !!!month_mapping))
+#convert the year and month_full columns to a Date format
+kenyan_temp <- kenyan_temp |>
+  mutate(date = ymd(paste(year, month, "01", sep = "-")))|>
+  select(date, temperature_celsius)
+#create a new data structure with both temperature and rain features
+kenyan_climate <- kenyan_temp
+kenyan_climate$rainfall_mm <- kenyan_rain$rainfall_mm
+
+write.csv(kenyan_climate, "Kenyan_climate_timeseries.csv")
+```
+
+
+## Timeseries analysis.   
+
+
+```{r}
+#create a time series object using the temperature_celsius column
+temp_ts <- ts(kenyan_climate$temperature_celsius, 
+              start = min(kenyan_climate$date), 
+              frequency = 12)
+rain_ts <- ts(kenyan_climate$rainfall_mm, 
+              start = min(kenyan_climate$date), 
+              frequency = 12)
+#viewthe time series object
+print(temp_ts)
+print(rain_ts)
+```
+
+
+
+```{r}
+#simple visualizations
+autoplot(temp_ts)
+autoplot(rain_ts)
+```
+     
+
+
+```{r}
+temp<- decompose(temp_ts, type = c("additive","multiplicative"))
+autoplot(temp)
+```
+     
+```{r}
+rain <- decompose(rain_ts, type = c("additive", "multiplicative"))
+autoplot(rain)
+```
+    
+## Data Preparation for timeseries modeling.    
+
+
+```{r}
+#preparing the data
+#splitting the data into training and test sets
+train_percentage <- 0.8  # 80% for training, 20% for testing
+train_size <- floor(train_percentage * length(temp_ts))
+train_data <- temp_ts[1:train_size]
+test_data <- temp_ts[(train_size + 1):length(temp_ts)]
+#scaling the data to improve model performance
+min_value <- min(temp_ts)
+max_value <- max(temp_ts)
+scaled_train_data <- scale(train_data, 
+                           center = min_value, 
+                           scale = max_value - min_value)
+scaled_test_data <- scale(test_data, 
+                          center = min_value, 
+                          scale = max_value - min_value)
+```
+
+
+### ARIMA modeling.     
+
+```{r}
+# Prepare the data for ARIMA modeling
+arima_data <- ts(kenyan_climate$temperature_celsius[1:312], start = min(kenyan_climate$date), frequency = 12)
+# Fit the ARIMA model
+arima_model <- auto.arima(arima_data)
+# Generate predictions using the ARIMA model
+arima_predictions <- forecast(arima_model, h = length(test_data))$mean
+# Plot the predictions and ground truth
+par(mfrow=c(1,2))
+plot(test_data, type = 'l', 
+     col = 'blue', xlab = 'Time', ylab = 'Temperature (Celsius)', 
+     main = 'Ground Truth')
+plot(arima_predictions, type = 'l', col = 'red',xlab = 'Time',
+     main="ARIMA Predictions")
+```
+
+
+### PROPHET model.
+
+   
+```{r}
+# Prepare the data
+prophet_data <- data.frame(ds = kenyan_climate$date, 
+                           y = kenyan_climate$temperature_celsius)
+# Create the Prophet model
+model <- prophet(prophet_data)
+# Fit the model to the data
+#model <- fit.prophet(model, prophet_data)
+# Create future dates for forecasting
+future_dates <- make_future_dataframe(model, periods = 12, freq = "month")
+# Generate predictions using the Prophet model
+prophet_predictions <- predict(model, future_dates)$yhat
+par(mfrow=c(1,2))
+# Plot the predictions and ground truth
+plot(prophet_data$ds, prophet_data$y, type = 'l', 
+     col = 'blue', xlab = 'Time', ylab = "Temperature (Celsius)", 
+     main = "Ground Truth")
+plot(future_dates$ds, prophet_predictions, type = 'l', col = 'red',
+     xlab = 'Time', main = "Prophet Predictions")
+```
+
+
+### LSTM modeling.  
+
+```{r}
+#creating an LSTM model
+model <- keras_model_sequential()
+model |>
+  layer_lstm(units = 50, input_shape = c(1, 1)) |>
+  layer_dense(units = 1)
+#compiling the model
+model |> compile(
+  loss = 'mean_squared_error',
+  optimizer = optimizer_adam())
+#fitting the model to the training data
+history <- model |> fit(
+  x = array_reshape(scaled_train_data, c(length(scaled_train_data), 1, 1)),
+  y = scaled_train_data,
+  epochs = 50,
+  batch_size = 1,
+  verbose = 2)
+# Make predictions on the test data
+scaled_predictions <- model |> predict(array_reshape(scaled_test_data, c(length(scaled_test_data), 1, 1)))
+#un-scale the predicted temperature values
+predictions <- scaled_predictions * (max_value - min_value) + min_value
+par(mfrow=c(1,2))
+# Plot the predictions and ground truth
+plot(test_data, type = 'l', col = 'blue', 
+     xlab = 'Time', ylab = 'Temperature (Celsius)', 
+     main = 'Ground Truth')
+plot(predictions, type = 'l', col = 'red', 
+     xlab = 'Time', main = 'LSTM Predictions')
+```
+
+
+
+
+       
+
+
+
+
+
+
+
