@@ -1,5 +1,5 @@
 ---
-title: "R Notebook"
+title: "Kenyan Climate Data Timeseries Analysis and Prediction"
 author: "Kelvin Mwaka Muia"
 output: html_notebook
 ---
@@ -19,6 +19,7 @@ knitr::opts_chunk$set(echo = TRUE,
 rm(list = ls()) #clear R work space for every rerun
 # silent package loading
 packages <- c("prophet", "janitor","knitr","forcats","forecast",
+              "reticulate","tensorflow",
               "lubridate", "ggplot2","keras","tidyverse", 
               "formatR","ggthemes","ggpubr", "scales","tidymodels")
 # Install packages not yet installed
@@ -148,8 +149,7 @@ par(mfrow=c(1,2))
 plot(test_data, type = 'l', 
      col = 'blue', xlab = 'Time', ylab = 'Temperature (Celsius)', 
      main = 'Ground Truth')
-plot(arima_predictions, type = 'l', col = 'red',xlab = 'Time',
-     main="ARIMA Predictions")
+plot(arima_predictions, type = 'l', col = 'red',xlab = 'Time', main="ARIMA Predictions")
 ```
 
 
@@ -160,7 +160,7 @@ plot(arima_predictions, type = 'l', col = 'red',xlab = 'Time',
 # Prepare the data
 prophet_data <- data.frame(ds = kenyan_climate$date, 
                            y = kenyan_climate$temperature_celsius)
-# Create the Prophet model
+#create the Prophet model
 model <- prophet(prophet_data)
 # Fit the model to the data
 #model <- fit.prophet(model, prophet_data)
@@ -168,7 +168,7 @@ model <- prophet(prophet_data)
 future_dates <- make_future_dataframe(model, periods = 12, freq = "month")
 # Generate predictions using the Prophet model
 prophet_predictions <- predict(model, future_dates)$yhat
-par(mfrow=c(1,2))
+par(mfrow=c(2,1))
 # Plot the predictions and ground truth
 plot(prophet_data$ds, prophet_data$y, type = 'l', 
      col = 'blue', xlab = 'Time', ylab = "Temperature (Celsius)", 
@@ -178,7 +178,7 @@ plot(future_dates$ds, prophet_predictions, type = 'l', col = 'red',
 ```
 
 
-### LSTM modeling.  
+### LSTM modeling. 
 
 ```{r}
 #creating an LSTM model
@@ -197,8 +197,13 @@ history <- model |> fit(
   epochs = 50,
   batch_size = 1,
   verbose = 2)
+```
+
+
+```{r}
 # Make predictions on the test data
-scaled_predictions <- model |> predict(array_reshape(scaled_test_data, c(length(scaled_test_data), 1, 1)))
+scaled_predictions <- model |> 
+  predict(array_reshape(scaled_test_data,c(length(scaled_test_data), 1, 1)))
 #un-scale the predicted temperature values
 predictions <- scaled_predictions * (max_value - min_value) + min_value
 par(mfrow=c(1,2))
@@ -209,8 +214,6 @@ plot(test_data, type = 'l', col = 'blue',
 plot(predictions, type = 'l', col = 'red', 
      xlab = 'Time', main = 'LSTM Predictions')
 ```
-
-
 
 
        
