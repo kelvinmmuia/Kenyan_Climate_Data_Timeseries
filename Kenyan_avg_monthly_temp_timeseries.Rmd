@@ -4,24 +4,22 @@ author: "Kelvin Mwaka Muia"
 output: html_notebook
 ---
 
+# Data importation and initial inspection.   
+
 ```{r setup, include=FALSE}
+rm(list=ls())#clear R work space for every rerun
 knitr::opts_chunk$set(echo = TRUE,
                       warning = FALSE,
                       message = FALSE,
                       out.width = "150%",
                       out.height = "150%",
                       fig.align = "center")
-```
-
-
-
-```{r}
-rm(list = ls()) #clear R work space for every rerun
 # silent package loading
-packages <- c("prophet", "janitor","knitr","forcats","forecast",
-              "reticulate","tensorflow",
-              "lubridate", "ggplot2","keras","tidyverse", 
-              "formatR","ggthemes","ggpubr", "scales","tidymodels")
+packages <- c("tsibble", "fpp3", "gridExtra","prophet",
+              "janitor","knitr","forcats","forecast",
+              "reticulate","tensorflow", "lubridate", 
+              "ggplot2","keras","tidyverse","formatR",
+              "ggthemes","ggpubr", "scales","tidymodels")
 # Install packages not yet installed
 installed_packages <- packages %in% rownames(installed.packages())
 if (any(installed_packages == FALSE)) {
@@ -51,9 +49,201 @@ kenyan_temp <- kenyan_temp |>
   mutate(month = gsub("Average", "", month_average)) |>
   mutate(month = gsub("\\s", "", month)) |>
   select(year,month,temperature_celsius)
+#concatenate the year and month variables to form a year-month variable
+kenyan_temp$year_month <- paste(kenyan_temp$year, kenyan_temp$month, sep="-")
+#select the necessary columns and convert to tsibble
+kenyan_temp <- kenyan_temp |> 
+  mutate(month = yearmonth(year_month)) |>
+  select(month, temperature_celsius) |>
+  as_tsibble()
 head(kenyan_temp)
 ```
-      
+
+
+
+```{r}
+#explore and visualize the data
+kenyan_temp |>
+  autoplot(temperature_celsius) +
+  labs(y = "Average temperature",
+       title = "Monthly average temperature")
+```
+       
+
+```{r}
+#visualize the seasonality, and subseries
+kenyan_temp |> 
+  gg_season(temperature_celsius, period="year") 
+kenyan_temp |>
+  gg_subseries(temperature_celsius)
+```
+     
+     
+     
+## Data Preparation for timeseries modeling.  
+
+```{r}
+#partition the data into training set (up to 1999)
+train_tsibble <- kenyan_temp |>
+  filter(year(month) <= 2011)
+```
+
+
+# Exponential Smoothing (SES)
+
+## Auto ETS
+
+```{r}
+#automatic ETS model selection
+ets_auto <- train_tsibble %>%
+  model(ETS(temperature_celsius))
+report(ets_auto)
+```
+        
+> 1. ETS(M,N,M) (the model suggested by auto ETS):
+
+- Accounts for multiplicative errors, meaning the size of the errors is proportional to the level of the series.    
+
+
+### Auto-ETS-model Fitted vs actual temperature values
+
+```{r}
+#augment auto ETS model
+ets_auto_data <- augment(ets_auto) |>
+  select(temperature_celsius, .resid, .fitted)
+ets_auto_data |>
+  ggplot() +
+  geom_line(aes(x = month, y = temperature_celsius, color = "Actual")) +
+  geom_line(aes(x = month, y = .fitted, color = "Fitted")) +
+  labs(y = "Fitted", x = "Month",
+       title = "Actual temperature (celsius) vs ETS (MNM-auto) fitted values") +
+  geom_abline(intercept = 0, slope = 1) +
+  scale_color_manual(values = c("Actual" = "blue", "Fitted" = "red"))
+
+```
+
+  
+
+
+## ETS(M,A,M): Additive trend, multiplicative errors.     
+
+
+```{r}
+#ETS MAM
+ets_MAM <- train_tsibble %>%
+  model(ETS(temperature_celsius ~ error("M") + trend("A") + season("M")))
+report(ets_MAM)
+
+```
+    
+### MAM-ETS-model Fitted vs actual temperature values
+
+```{r}
+#augment auto ETS model
+ets_MAM_data <- augment(ets_MAM) |>
+  select(temperature_celsius, .resid, .fitted)
+ets_MAM_data |>
+  ggplot() +
+  geom_line(aes(x = month, y = temperature_celsius, color = "Actual")) +
+  geom_line(aes(x = month, y = .fitted, color = "Fitted")) +
+  labs(y = "Fitted", x = "Month",
+       title = "Actual temperature (celsius) vs ETS (MAM) fitted values") +
+  geom_abline(intercept = 0, slope = 1) +
+  scale_color_manual(values = c("Actual" = "blue", "Fitted" = "red"))
+
+```
+
+
+
+## ETS(M,Ad,M): Damped additive trend, multiplicative errors.
+
+
+```{r}
+#ETS MAM
+ets_MAdM <- train_tsibble %>%
+  model(ETS(temperature_celsius ~ error("M") + trend("Ad") + season("M")))
+report(ets_MAdM)
+
+```
+    
+### MAdM-ETS-model Fitted vs actual temperature values
+
+```{r}
+#augment auto ETS model
+ets_MAdM_data <- augment(ets_MAdM) |>
+  select(temperature_celsius, .resid, .fitted)
+ets_MAdM_data |>
+  ggplot() +
+  geom_line(aes(x = month, y = temperature_celsius, color = "Actual")) +
+  geom_line(aes(x = month, y = .fitted, color = "Fitted")) +
+  labs(y = "Fitted", x = "Month",
+       title = "Actual temperature (celsius) vs ETS (MAdM) fitted values") +
+  geom_abline(intercept = 0, slope = 1) +
+  scale_color_manual(values = c("Actual" = "blue", "Fitted" = "red"))
+
+```
+
+
+
+
+## ETS(M,N,A): Multiplicative seasonality, multiplicative errors.
+
+```{r}
+#ETS MNA
+ets_MNA <- train_tsibble %>%
+  model(ETS(temperature_celsius ~ error("M") + trend("N") + season("A")))
+report(ets_MNA)
+```
+     
+### MAdM-ETS-model Fitted vs actual temperature values
+
+```{r}
+#augment auto ETS model
+ets_MNA_data <- augment(ets_MNA) |>
+  select(temperature_celsius, .resid, .fitted)
+ets_MNA_data |>
+  ggplot() +
+  geom_line(aes(x = month, y = temperature_celsius, color = "Actual")) +
+  geom_line(aes(x = month, y = .fitted, color = "Fitted")) +
+  labs(y = "Fitted", x = "Month",
+       title = "Actual temperature (celsius) vs ETS (MNA) fitted values") +
+  geom_abline(intercept = 0, slope = 1) +
+  scale_color_manual(values = c("Actual" = "blue", "Fitted" = "red"))
+
+```
+
+
+
+## ETS(A,N,N); additive errors (errors are independent of the level of the series)
+
+```{r}
+#ETS ANN
+ets_ANN <- train_tsibble %>%
+  model(ETS(temperature_celsius ~ error("A") + trend("N") + season("N")))
+report(ets_ANN)
+
+```
+
+```{r}
+#augment auto ETS model
+ets_ANN_data <- augment(ets_ANN) |>
+  select(temperature_celsius, .resid, .fitted)
+ets_ANN_data |>
+  ggplot() +
+  geom_line(aes(x = month, y = temperature_celsius, color = "Actual")) +
+  geom_line(aes(x = month, y = .fitted, color = "Fitted")) +
+  labs(y = "Fitted", x = "Month",
+       title = "Actual temperature (celsius) vs ETS (ANN) fitted values") +
+  geom_abline(intercept = 0, slope = 1) +
+  scale_color_manual(values = c("Actual" = "blue", "Fitted" = "red"))
+
+```
+
+
+
+
+
+
 ## Create date data.  
 
 ```{r}
@@ -103,15 +293,7 @@ autoplot(rain_ts)
      
 
 
-```{r}
-temp<- decompose(temp_ts, type = c("additive","multiplicative"))
-autoplot(temp)
-```
-     
-```{r}
-rain <- decompose(rain_ts, type = c("additive", "multiplicative"))
-autoplot(rain)
-```
+
     
 ## Data Preparation for timeseries modeling.    
 
